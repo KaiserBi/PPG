@@ -222,7 +222,7 @@ def process_ppg_file(file_path):
         heart_area += simpson(psd[second_mask], frequencies[second_mask])
 
     # Define the "all" frequency band for noise calculation
-    mask_all = (frequencies >= 0.5) & (frequencies <= 15) # Frequencies typically relevant for PPG
+    mask_all = (frequencies >= 0.5) & (frequencies <= 10) # Frequencies typically relevant for PPG
 
     all_area = 0
     if np.any(mask_all):
@@ -242,7 +242,7 @@ def process_ppg_file(file_path):
 
     # --- Store plotting data if this is the target file ---
     plotting_data = None
-    if os.path.basename(file_path) == "22_3middle.csv":
+    if os.path.basename(file_path) == "22_middle.csv":
         # Calculate dominant frequency for plotting title
         # This requires finding the max PSD in the heart rate band
         mask_heart_combined = ((frequencies >= heart_rate_range[0]) & (frequencies <= heart_rate_range[1])) | \

@@ -6,6 +6,8 @@ from scipy.signal import hilbert, savgol_filter, find_peaks, welch, detrend
 import pandas as pd
 from scipy.integrate import simpson
 from scipy.interpolate import interp1d
+import pyhrv
+import pyhrv.frequency_domain as fd
 
 # === File paths ===
 baser_path = os.path.join("PPG-Sleepiness-Detection", "data")
@@ -13,7 +15,7 @@ base_path = os.path.join(baser_path, "firstTests")
 ir_path = os.path.join(base_path, "belle.csv")
 
 # === Load IR data ===
-with open("data\\firstTests\\ppg_data.csv", 'r') as file:
+with open("data\\firstTests\\42_5pinky.csv", 'r') as file:
     reader = csv.reader(file)
     
     # Read all rows once and extract timestamps and IR data
@@ -78,7 +80,7 @@ print(len(uniform_timestamps))
 
 # === CONTROL: Time range to plot (in seconds) ===
 start_time = 0   # set this to your desired start
-end_time = 300     # set this to your desired end
+end_time = 900     # set this to your desired end
 
 # === Filter data based on time range ===
 filtered_indices = [i for i, t in enumerate(uniform_timestamps) if start_time <= t <= end_time]
@@ -172,7 +174,7 @@ hrv = np.std(filtered_rr_intervals)
 
 
 
-'''
+
 # === LF/HF Ratio ===
 sampling_rate_hz=4
 segment_length_s=570
@@ -285,7 +287,7 @@ print(f"LF/HF Ratio: {lf_hf_ratio:.2f}")
 
 
 
-'''
+
 # === SNR ===
 fs = actual_sampling_rate  # Sampling frequency
 frequencies, psd = welch(y_fixed, 
@@ -342,6 +344,8 @@ average_peak_value = np.mean(peak_values)
 # 3. Print the result
 print(average_peak_value)
 
+# Convert list to numpy array
+
 # === Plot 1: Smoothed and Raw in Window 1 ===
 
 plt.figure(1, figsize=(12, 6))
@@ -388,7 +392,7 @@ plt.xlabel("Frequency (Hz)")
 plt.ylabel("Amplitude")
 plt.xlim(0, 9)  # Limit x-axis to 10 Hz for better visibility
 plt.grid(True)
-'''
+
 # === Plot 4: PSD ===
 plt.figure(4, figsize=(12, 6))
 plt.plot(frequencies, psd, label='PSD')
@@ -404,7 +408,7 @@ plt.axvline(dominant_freq, color='red', linestyle='--', label=f'Dominant Frequen
 plt.axvline(dominant_freq*2, color='purple', linestyle='--', label=f'Dominant Frequency ({dominant_freq*2:.2f} Hz)')
 plt.axvline(dominant_freq*3, color='purple', linestyle='--', label=f'Dominant Frequency ({dominant_freq*3:.2f} Hz)')
 plt.axvline(dominant_freq*4, color='purple', linestyle='--', label=f'Dominant Frequency ({dominant_freq*4:.2f} Hz)')
-plt.xlim(0.5, 10)
+plt.xlim(0, 15)
 plt.ylim(0, np.max(psd) * 1.1)  # Set y-axis limit to 110% of max PSD value
 
 
@@ -422,12 +426,21 @@ plt.axvspan(LF_band[0], LF_band[1], color='red', alpha=0.2, label='LF Band')
 plt.axvspan(HF_band[0], HF_band[1], color='green', alpha=0.2, label='HF Band')
 plt.xlim(0, 1.5)  # Show up to 15 Hz (no need to show Nyquist at 200 Hz)
 
-'''
+
 
 # Formatting
 
 
 
 # === Show both windows ===
+nni = np.array(filtered_rr_intervals)
+# Compute the PSD and frequency domain parameters
+result = fd.welch_psd(nni=nni)
+
+# Access peak frequencies using the key 'fft_peak'
+print(result['fft_peak'])
+
+print("hi")
 
 plt.show() 
+
