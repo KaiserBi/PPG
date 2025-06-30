@@ -8,6 +8,14 @@ from scipy.integrate import simpson
 from scipy.interpolate import interp1d
 
 import scipy.stats as stats
+import os
+import csv
+import pandas as pd
+import pingouin as pg
+import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy.stats import shapiro
+
 # === File paths ===
 data_folder = os.path.join("data", "firstTests")
 
@@ -60,8 +68,8 @@ def process_ppg_file(file_path):
     end_time_processed = timestamps[-1]
     num_samples = int(np.ceil((end_time_processed - 0) * actual_sampling_rate)) # Assuming start is 0
     uniform_timestamps = np.linspace(0, end_time_processed, num_samples)
-    print("new time")
-    print(len(uniform_timestamps))
+    # print("new time")
+    # print(len(uniform_timestamps))
 
     # Handle cases where timestamps might not be strictly increasing due to correction or input data
     unique_timestamps, unique_indices = np.unique(timestamps, return_index=True)
@@ -74,7 +82,7 @@ def process_ppg_file(file_path):
     start_time_segment = 20  # Renamed to avoid conflict with `start_time` for plotting if it were used
     end_time_segment = min(320, end_time_processed) # Renamed to avoid conflict
 
-    print(end_time_segment)
+    # print(end_time_segment)
     # === Filter data based on time range ===
 
     custom_time_ranges = {}
@@ -203,7 +211,7 @@ def process_ppg_file(file_path):
                              scaling='density')
 
     plusminusrange = 0.2
-    print(bps)
+    # print(bps)
     heart_rate_range = (bps - plusminusrange, bps + plusminusrange)
     first_harmonic = (bps * 2 - plusminusrange, bps * 2 + plusminusrange)
     second_harmonic = (bps * 3 - plusminusrange, bps * 3 + plusminusrange)
@@ -279,158 +287,310 @@ def process_ppg_file(file_path):
 
     return os.path.basename(file_path), snr, average_peak_value, plotting_data
 
+def main():
+    data_folder = os.path.join("./data", "firstTests")
 
-# --- Main script to loop through files ---
-if __name__ == "__main__":
+    # === Store results ===
+    thumb_snr, pointer_snr, middle_snr, ring_snr, pinky_snr = [], [], [], [], []
+    thumb_apa, pointer_apa, middle_apa, ring_apa, pinky_apa = [], [], [], [], []
 
     results = []
 
-    thumbhttrs = []
-    pointerhttrs = []
-    middlehttrs = []
-    ringhttrs = []
-    pinkyhttrs = []
-
-
-    plot_for_21_middle = None # Variable to store plotting data for '21_middle.csv'
-
-    # Get all CSV files in the specified data_folder
+    # === Process each file ===
     for filename in os.listdir(data_folder):
         if filename.endswith(".csv"):
             file_path = os.path.join(data_folder, filename)
-            file_name, snr_value, aph_value, plotting_data = process_ppg_file(file_path)
-            if file_name == "22_3middle.csv" and plotting_data is not None:
-                plot_for_21_middle = plotting_data
-            results.append({"File": file_name, "SNR": snr_value, "APH": aph_value})
-            if file_name == "22_3middle.csv" and plotting_data is not None:
-                plot_for_21_middle = plotting_data
+            file_name, snr_value, apa_value, _ = process_ppg_file(file_path)  # Your existing function
+
+            results.append({"File": file_name, "SNR": snr_value, "APA": apa_value})
+
+            if "1thumb" in file_name:
+                thumb_snr.append(snr_value)
+                thumb_apa.append(apa_value)
+            elif "2pointer" in file_name:
+                pointer_snr.append(snr_value)
+                pointer_apa.append(apa_value)
+            elif "3middle" in file_name:
+                middle_snr.append(snr_value)
+                middle_apa.append(apa_value)
+            elif "4ring" in file_name:
+                ring_snr.append(snr_value)
+                ring_apa.append(apa_value)
+            elif "5pinky" in file_name:
+                pinky_snr.append(snr_value)
+                pinky_apa.append(apa_value)
+
+    # === Build dataframes ===
+    subject_count = len(thumb_snr)
+    snr_df = pd.DataFrame({
+        'subject_id': range(1, subject_count + 1),
+        'thumb': thumb_snr,
+        'pointer': pointer_snr,
+        'middle': middle_snr,
+        'ring': ring_snr,
+        'pinky': pinky_snr
+    })
+    apa_df = pd.DataFrame({
+        'subject_id': range(1, subject_count + 1),
+        'thumb': thumb_apa,
+        'pointer': pointer_apa,
+        'middle': middle_apa,
+        'ring': ring_apa,
+        'pinky': pinky_apa
+    })
+
+    snr_long = snr_df.melt(id_vars=['subject_id'], var_name='finger', value_name='SNR')
+    apa_long = apa_df.melt(id_vars=['subject_id'], var_name='finger', value_name='APA')
+    
+    print("SNR subjects:", len(snr_df))
+    print("APA subjects:", len(apa_df))
+    print("SNR columns per subject:", snr_df.columns.tolist())
+    print("APA columns per subject:", apa_df.columns.tolist())
+
+    # === Repeated measures ANOVA for SNR ===
+    anova_snr = pg.rm_anova(dv='SNR', within='finger', subject='subject_id', data=snr_long, correction=True)
+    print("\n=== Repeated Measures ANOVA for SNR ===")
+    print(anova_snr)
+    # if anova_snr['p-spher'].values[0] < 0.05:
+    #     print("⚠ Sphericity violated — Greenhouse-Geisser correction applied.")
+
+    snr_resid = snr_long['SNR'] - snr_long.groupby('subject_id')['SNR'].transform('mean')
+    shapiro_snr = shapiro(snr_resid)
+    print(f"Shapiro-Wilk SNR residuals: W={shapiro_snr.statistic:.3f}, p={shapiro_snr.pvalue:.3f}")
+
+    if anova_snr['p-GG-corr'].values[0] < 0.05:
+        posthoc_snr = pg.pairwise_ttests(dv='SNR', within='finger', subject='subject_id',
+                                         data=snr_long, padjust='bonf')
+        print("\nPost-hoc SNR comparisons:")
+        print(posthoc_snr)
+
+    # === Repeated measures ANOVA for APA ===
+    anova_apa = pg.rm_anova(dv='APA', within='finger', subject='subject_id', data=apa_long, detailed=True)
+    print("\n=== Repeated Measures ANOVA for APA ===")
+    print(anova_apa)
+    if anova_apa['p-spher'].values[0] < 0.05:
+        print("⚠ Sphericity violated — Greenhouse-Geisser correction applied.")
+
+    apa_resid = apa_long['APA'] - apa_long.groupby('subject_id')['APA'].transform('mean')
+    shapiro_apa = shapiro(apa_resid)
+    print(f"Shapiro-Wilk APA residuals: W={shapiro_apa.statistic:.3f}, p={shapiro_apa.pvalue:.3f}")
+
+    if anova_apa['p-GG-corr'].values[0] < 0.05:
+        posthoc_apa = pg.pairwise_ttests(dv='APA', within='finger', subject='subject_id',
+                                         data=apa_long, padjust='bonf')
+        print("\nPost-hoc APA comparisons:")
+        print(posthoc_apa)
+
+    # === Plot distributions ===
+    sns.boxplot(x='finger', y='SNR', data=snr_long)
+    sns.swarmplot(x='finger', y='SNR', data=snr_long, color=".25")
+    plt.title("SNR distribution by finger")
+    plt.grid(True)
+    plt.show()
+
+    sns.boxplot(x='finger', y='APA', data=apa_long)
+    sns.swarmplot(x='finger', y='APA', data=apa_long, color=".25")
+    plt.title("APA distribution by finger")
+    plt.grid(True)
+    plt.show()
+
+    merged = pd.merge(snr_long, apa_long, on=['subject_id', 'finger'])
+    sns.scatterplot(x='SNR', y='APA', hue='finger', data=merged)
+    plt.title("SNR vs APA")
+    plt.grid(True)
+    plt.show()
+    
+    # === POST-HOC PAIRWISE COMPARISONS (SNR) ===
+    if anova_snr['p-GG-corr'].values[0] < 0.05:
+        print("\nPost-hoc pairwise comparisons for SNR (Bonferroni corrected):")
+        posthoc_snr = pg.pairwise_ttests(dv='SNR', within='finger', subject='subject_id',
+                                        data=snr_long, padjust='bonf', parametric=True)
+        print(posthoc_snr[['A', 'B', 'T', 'dof', 'p-unc', 'p-corr']])
+
+    # === POST-HOC PAIRWISE COMPARISONS (APA) ===
+    if anova_apa['p-GG-corr'].values[0] < 0.05:
+        print("\nPost-hoc pairwise comparisons for APA (Bonferroni corrected):")
+        posthoc_apa = pg.pairwise_ttests(dv='APA', within='finger', subject='subject_id',
+                                        data=apa_long, padjust='bonf', parametric=True)
+        print(posthoc_apa[['A', 'B', 'T', 'dof', 'p-unc', 'p-corr']])
+
+    # === NON-PARAMETRIC FRIEDMAN TEST (SNR) ===
+    print("\n=== Non-parametric Friedman test for SNR ===")
+    friedman_snr = pg.friedman(data=snr_long, dv='SNR', within='finger', subject='subject_id')
+    print(friedman_snr)
+
+    # === NON-PARAMETRIC FRIEDMAN TEST (APA) ===
+    print("\n=== Non-parametric Friedman test for APA ===")
+    friedman_apa = pg.friedman(data=apa_long, dv='APA', within='finger', subject='subject_id')
+    print(friedman_apa)
+
+    # === NON-PARAMETRIC POST-HOC (SNR) ===
+    if friedman_snr['p-unc'].values[0] < 0.05:
+        print("\nPost-hoc Durbin-Conover test for SNR (Bonferroni corrected):")
+        posthoc_snr_np = pg.pairwise_tests(dv='SNR', within='finger', subject='subject_id',
+                                        data=snr_long, padjust='bonf', parametric=False)
+        print(posthoc_snr_np[['A', 'B', 'W-val', 'p-unc', 'p-corr']])
+
+    # === NON-PARAMETRIC POST-HOC (APA) ===
+    if friedman_apa['p-unc'].values[0] < 0.05:
+        print("\nPost-hoc Durbin-Conover test for APA (Bonferroni corrected):")
+        posthoc_apa_np = pg.pairwise_tests(dv='APA', within='finger', subject='subject_id',
+                                        data=apa_long, padjust='bonf', parametric=False)
+        print(posthoc_apa_np[['A', 'B', 'W-val', 'p-unc', 'p-corr']])
 
 
-    ## Processing Summary
-    print("\n" + "="*50)
-    print("                 Processing Summary")
-    print("="*50)
-    for result in results:
-        snr_str = f"{result['SNR']:.4f}" if result['SNR'] is not None else "N/A"
-        aph_str = f"{result['APH']:.4f}" if result['APH'] is not None else "N/A"
-        print(f"File: {result['File']:<25} | SNR: {snr_str:<8} | APH: {aph_str:<8}")
+# --- Main script to loop through files ---
+if __name__ == "__main__":
+    main()
 
-        if ("1thumb" in result['File']):
-            thumbhttrs.append(result['SNR'])
-        elif ("2pointer" in result['File']):
-            pointerhttrs.append(result['SNR'])
-        elif ("3middle" in result['File']): 
-            middlehttrs.append(result['SNR'])
-        elif ("4ring" in result['File']):   
-            ringhttrs.append(result['SNR']) 
-        elif ("5pinky" in result['File']):
-            pinkyhttrs.append(result['SNR'])
+    # results = []
 
-    print("="*50)
-
-    if results: # Only save if there are results
-        with open('output.csv', 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-
-            # Determine the number of columns needed per group (File + APH + SNR)
-            cols_per_file = 1 # File Name, APH, SNR
-
-            # Create a dynamic header
-            header_row = []
-            num_groups = (len(results) + 4) // 5 # Ceiling division
-            for i in range(num_groups):
-                header_row.extend([f'File_{i+1}'])
-            writer.writerow(header_row)
-
-            # Prepare rows for output
-            output_rows = [[] for _ in range(len(results) * 4)]  # 4 rows per pair: SNR, APH, blank, blank
-
-            for col_start in range(0, len(results), 5):  # New column every 5 pairs
-                for i in range(5):
-                    index = col_start + i
-                    if index >= len(results):
-                        break
-                    result = results[index]
-                    snr_value = f"{result['SNR']:.4f}" if result['SNR'] is not None else ""
-                    aph_value = f"{result['APH']:.4f}" if result['APH'] is not None else ""
-
-                    row_index = i * 4  # 4 lines per result
-                    output_rows[row_index].append(snr_value)        # SNR
-                    output_rows[row_index + 1].append(aph_value)    # APH
-                    output_rows[row_index + 2].append("")           # blank
-                    output_rows[row_index + 3].append("")           # blank
-
-            # Write to CSV
-            writer.writerows(output_rows)
-
-        print(f"\nGrouped results saved to file")
-    else:
-        print("\nNo results to save to CSV.")
+    # thumbhttrs = []
+    # pointerhttrs = []
+    # middlehttrs = []
+    # ringhttrs = []
+    # pinkyhttrs = []
 
 
-    print("anova")
-    print(stats.f_oneway(thumbhttrs, pointerhttrs, middlehttrs, ringhttrs, pinkyhttrs))
+    # plot_for_21_middle = None # Variable to store plotting data for '21_middle.csv'
 
-    if plot_for_21_middle is not None:
-        print("\n--- Generating PSD Plot for 21_middle.csv ---")
-        frequencies = plot_for_21_middle['frequencies']
-        psd = plot_for_21_middle['psd']
-        heart_rate_bpm = plot_for_21_middle['heart_rate_bpm']
-        snr = plot_for_21_middle['snr']
-        heart_rate_range = plot_for_21_middle['heart_rate_range']
-        first_harmonic = plot_for_21_middle['first_harmonic']
-        # second_harmonic = plot_for_21_middle['second_harmonic'] # Not used in plot, but available
-        dominant_freq = plot_for_21_middle['dominant_freq']
-
-
-        plt.figure(1, figsize=(12, 6))
-        plt.plot(plot_for_21_middle['x_values_raw_plot'], plot_for_21_middle['ir_data_smoothed_plot'], label='IR Smoothed')
-        plt.plot(plot_for_21_middle['x_values_raw_plot'], plot_for_21_middle['ir_data_smoothed_plot'], 'o', label='IR Raw', markersize=3)
-        plt.title(f"PPG Signal — Smoothed & Raw s")
-        plt.xlabel("Time (seconds)")
-        plt.ylabel("Sensor Value")
-        plt.legend()
-        plt.xlim(5, 325)
-        plt.grid(True)
-        plt.tight_layout()
-
-        plt.figure(2, figsize=(12, 6))
-        plt.plot(plot_for_21_middle['xfilter'], plot_for_21_middle['hpfilter'], label='High Pass Detrended', color='purple')
-        plt.plot(plot_for_21_middle['filterpeaktimes'], plot_for_21_middle['hpfilter'][plot_for_21_middle['peakss']], 'ro', label="Peaks", markersize = 3)
-
-        plt.title(f"PPG Signal (HP Detrended)")
-        plt.xlabel("Time (seconds)")
-        plt.ylabel("HP Detrended Value")
-        plt.legend()
-        plt.xlim(5, 325)
-        plt.grid(True)
-        plt.tight_layout()
+    # # Get all CSV files in the specified data_folder
+    # for filename in os.listdir(data_folder):
+    #     if filename.endswith(".csv"):
+    #         file_path = os.path.join(data_folder, filename)
+    #         file_name, snr_value, aph_value, plotting_data = process_ppg_file(file_path)
+    #         if file_name == "22_3middle.csv" and plotting_data is not None:
+    #             plot_for_21_middle = plotting_data
+    #         results.append({"File": file_name, "SNR": snr_value, "APH": aph_value})
+    #         if file_name == "22_3middle.csv" and plotting_data is not None:
+    #             plot_for_21_middle = plotting_data
 
 
-        plt.figure(4, figsize=(12, 6))
-        plt.plot(frequencies, psd, label='PSD')
-        plt.xlabel('Frequency (Hz)')
-        plt.ylabel('Power Spectral Density (V²/Hz)')
-        plt.title(f'PPG Power Spectral Density\nDominant HR: {heart_rate_bpm:.1f} BPM | SNR: {snr:.2f}')
+    # ## Processing Summary
+    # print("\n" + "="*50)
+    # print("                 Processing Summary")
+    # print("="*50)
+    # for result in results:
+    #     snr_str = f"{result['SNR']:.4f}" if result['SNR'] is not None else "N/A"
+    #     aph_str = f"{result['APH']:.4f}" if result['APH'] is not None else "N/A"
+    #     print(f"File: {result['File']:<25} | SNR: {snr_str:<8} | APH: {aph_str:<8}")
 
-        # Add heart rate band shading
-        plt.axvspan(heart_rate_range[0], heart_rate_range[1], color='green', alpha=0.1, label='Heart Rate Band')
-        plt.axvspan(first_harmonic[0], first_harmonic[1], color='green', alpha=0.1, label='First Harmonic Heart Rate Band')
-        # You can add the second harmonic shading here if desired:
-        # plt.axvspan(second_harmonic[0], second_harmonic[1], color='green', alpha=0.1, label='Second Harmonic Heart Rate Band')
+    #     if ("1thumb" in result['File']):
+    #         thumbhttrs.append(result['SNR'])
+    #     elif ("2pointer" in result['File']):
+    #         pointerhttrs.append(result['SNR'])
+    #     elif ("3middle" in result['File']): 
+    #         middlehttrs.append(result['SNR'])
+    #     elif ("4ring" in result['File']):   
+    #         ringhttrs.append(result['SNR']) 
+    #     elif ("5pinky" in result['File']):
+    #         pinkyhttrs.append(result['SNR'])
 
-        if dominant_freq > 0: # Only plot vertical lines if a dominant frequency was found
-            plt.axvline(dominant_freq, color='red', linestyle='--', label=f'Dominant Frequency ({dominant_freq:.2f} Hz)')
-            if dominant_freq * 2 < 10: # Only plot if within xlim
-                plt.axvline(dominant_freq*2, color='purple', linestyle='--', label=f'2nd Harmonic ({dominant_freq*2:.2f} Hz)')
-            if dominant_freq * 3 < 10:
-                plt.axvline(dominant_freq*3, color='purple', linestyle='--', label=f'3rd Harmonic ({dominant_freq*3:.2f} Hz)')
-            if dominant_freq * 4 < 10:
-                plt.axvline(dominant_freq*4, color='purple', linestyle='--', label=f'4th Harmonic ({dominant_freq*4:.2f} Hz)')
+    # print("="*50)
 
-        plt.xlim(0.5, 10)
-        plt.ylim(0, np.max(psd) * 1.1)
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        plt.show() # Display the plot
+    # if results: # Only save if there are results
+    #     with open('output.csv', 'w', newline='') as csvfile:
+    #         writer = csv.writer(csvfile)
+
+    #         # Determine the number of columns needed per group (File + APH + SNR)
+    #         cols_per_file = 1 # File Name, APH, SNR
+
+    #         # Create a dynamic header
+    #         header_row = []
+    #         num_groups = (len(results) + 4) // 5 # Ceiling division
+    #         for i in range(num_groups):
+    #             header_row.extend([f'File_{i+1}'])
+    #         writer.writerow(header_row)
+
+    #         # Prepare rows for output
+    #         output_rows = [[] for _ in range(len(results) * 4)]  # 4 rows per pair: SNR, APH, blank, blank
+
+    #         for col_start in range(0, len(results), 5):  # New column every 5 pairs
+    #             for i in range(5):
+    #                 index = col_start + i
+    #                 if index >= len(results):
+    #                     break
+    #                 result = results[index]
+    #                 snr_value = f"{result['SNR']:.4f}" if result['SNR'] is not None else ""
+    #                 aph_value = f"{result['APH']:.4f}" if result['APH'] is not None else ""
+
+    #                 row_index = i * 4  # 4 lines per result
+    #                 output_rows[row_index].append(snr_value)        # SNR
+    #                 output_rows[row_index + 1].append(aph_value)    # APH
+    #                 output_rows[row_index + 2].append("")           # blank
+    #                 output_rows[row_index + 3].append("")           # blank
+
+    #         # Write to CSV
+    #         writer.writerows(output_rows)
+
+    #     print(f"\nGrouped results saved to file")
+    # else:
+    #     print("\nNo results to save to CSV.")
+
+
+    # print("anova")
+    # print(stats.f_oneway(thumbhttrs, pointerhttrs, middlehttrs, ringhttrs, pinkyhttrs))
+
+    # if plot_for_21_middle is not None:
+    #     print("\n--- Generating PSD Plot for 21_middle.csv ---")
+    #     frequencies = plot_for_21_middle['frequencies']
+    #     psd = plot_for_21_middle['psd']
+    #     heart_rate_bpm = plot_for_21_middle['heart_rate_bpm']
+    #     snr = plot_for_21_middle['snr']
+    #     heart_rate_range = plot_for_21_middle['heart_rate_range']
+    #     first_harmonic = plot_for_21_middle['first_harmonic']
+    #     # second_harmonic = plot_for_21_middle['second_harmonic'] # Not used in plot, but available
+    #     dominant_freq = plot_for_21_middle['dominant_freq']
+
+
+    #     plt.figure(1, figsize=(12, 6))
+    #     plt.plot(plot_for_21_middle['x_values_raw_plot'], plot_for_21_middle['ir_data_smoothed_plot'], label='IR Smoothed')
+    #     plt.plot(plot_for_21_middle['x_values_raw_plot'], plot_for_21_middle['ir_data_smoothed_plot'], 'o', label='IR Raw', markersize=3)
+    #     plt.title(f"PPG Signal — Smoothed & Raw s")
+    #     plt.xlabel("Time (seconds)")
+    #     plt.ylabel("Sensor Value")
+    #     plt.legend()
+    #     plt.xlim(5, 325)
+    #     plt.grid(True)
+    #     plt.tight_layout()
+
+    #     plt.figure(2, figsize=(12, 6))
+    #     plt.plot(plot_for_21_middle['xfilter'], plot_for_21_middle['hpfilter'], label='High Pass Detrended', color='purple')
+    #     plt.plot(plot_for_21_middle['filterpeaktimes'], plot_for_21_middle['hpfilter'][plot_for_21_middle['peakss']], 'ro', label="Peaks", markersize = 3)
+
+    #     plt.title(f"PPG Signal (HP Detrended)")
+    #     plt.xlabel("Time (seconds)")
+    #     plt.ylabel("HP Detrended Value")
+    #     plt.legend()
+    #     plt.xlim(5, 325)
+    #     plt.grid(True)
+    #     plt.tight_layout()
+
+
+    #     plt.figure(4, figsize=(12, 6))
+    #     plt.plot(frequencies, psd, label='PSD')
+    #     plt.xlabel('Frequency (Hz)')
+    #     plt.ylabel('Power Spectral Density (V²/Hz)')
+    #     plt.title(f'PPG Power Spectral Density\nDominant HR: {heart_rate_bpm:.1f} BPM | SNR: {snr:.2f}')
+
+    #     # Add heart rate band shading
+    #     plt.axvspan(heart_rate_range[0], heart_rate_range[1], color='green', alpha=0.1, label='Heart Rate Band')
+    #     plt.axvspan(first_harmonic[0], first_harmonic[1], color='green', alpha=0.1, label='First Harmonic Heart Rate Band')
+    #     # You can add the second harmonic shading here if desired:
+    #     # plt.axvspan(second_harmonic[0], second_harmonic[1], color='green', alpha=0.1, label='Second Harmonic Heart Rate Band')
+
+    #     if dominant_freq > 0: # Only plot vertical lines if a dominant frequency was found
+    #         plt.axvline(dominant_freq, color='red', linestyle='--', label=f'Dominant Frequency ({dominant_freq:.2f} Hz)')
+    #         if dominant_freq * 2 < 10: # Only plot if within xlim
+    #             plt.axvline(dominant_freq*2, color='purple', linestyle='--', label=f'2nd Harmonic ({dominant_freq*2:.2f} Hz)')
+    #         if dominant_freq * 3 < 10:
+    #             plt.axvline(dominant_freq*3, color='purple', linestyle='--', label=f'3rd Harmonic ({dominant_freq*3:.2f} Hz)')
+    #         if dominant_freq * 4 < 10:
+    #             plt.axvline(dominant_freq*4, color='purple', linestyle='--', label=f'4th Harmonic ({dominant_freq*4:.2f} Hz)')
+
+    #     plt.xlim(0.5, 10)
+    #     plt.ylim(0, np.max(psd) * 1.1)
+    #     plt.grid(True)
+    #     plt.legend()
+    #     plt.tight_layout()
+    #     plt.show() # Display the plot
