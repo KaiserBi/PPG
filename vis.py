@@ -15,7 +15,7 @@ base_path = os.path.join(baser_path, "firstTests")
 ir_path = os.path.join(base_path, "belle.csv")
 
 # === Load IR data ===
-with open("data\\firstTests\\42_5pinky.csv", 'r') as file:
+with open("ppg_data.csv", 'r') as file:
     reader = csv.reader(file)
     
     # Read all rows once and extract timestamps and IR data
@@ -132,7 +132,7 @@ hpfiltered = bandpass(ir_smooth, lowcut=0.6, highcut=3.3, fs=actual_sampling_rat
 # === Peak Finding ===
 peaks, props = find_peaks(hpfiltered, prominence=1.7, width = 0.18, distance = 0.5*actual_sampling_rate)
 
-'''
+
 # === FFT ===
 y = hpfiltered  # your filtered signal
 fs = actual_sampling_rate  # your sampling rate, e.g., 50 Hz
@@ -145,7 +145,7 @@ idx = xf >= 0
 xf = xf[idx]
 yf = np.abs(yf[idx])  # magnitude
 
-'''
+
 # === Biometric Calculation ===
 peak_times = np.array(peaks * time_interval) + start_time
 rr_intervals = np.diff(peak_times)
@@ -383,7 +383,7 @@ plt.tight_layout()
 
 
 
-'''
+
 # === Plot 3: FFT ===
 plt.figure(3, figsize=(12, 6))
 plt.plot(xf, yf, label='High Pass Detrended', color='purple')
@@ -412,7 +412,7 @@ plt.xlim(0, 15)
 plt.ylim(0, np.max(psd) * 1.1)  # Set y-axis limit to 110% of max PSD value
 
 
-'''
+
 # === Plot 5: RR-Interval PSD ===
 plt.figure(5, figsize=(10, 6))
 plt.plot(fafrequencies, psd_ms2_per_hz, color='blue', label='PSD')
