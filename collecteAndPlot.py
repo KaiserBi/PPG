@@ -3,7 +3,7 @@ import msvcrt  # Windows only
 import time
 
 # === Start picoData.py in background ===
-proc = subprocess.Popen(["python", "picoData.py"])
+proc = subprocess.Popen(["python", "picoDataUnpacking.py"])
 print("Recording... Press 'k' to stop early.")
 
 try:
@@ -12,7 +12,7 @@ try:
         if msvcrt.kbhit():
             key = msvcrt.getch().decode().lower()
             if key == 'k':
-                print("Detected 'k'. Stopping recording...")
+                print("Detected  'k'. Stopping recording...")
                 proc.terminate()
                 break
 except KeyboardInterrupt:
