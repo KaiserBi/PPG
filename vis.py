@@ -15,7 +15,7 @@ base_path = os.path.join(baser_path, "firstTests")
 ir_path = os.path.join(base_path, "belle.csv")
 
 # === Load IR data ===
-with open("ppg_data.csv", 'r') as file:
+with open("day1test10400am.csv", 'r') as file:
     reader = csv.reader(file)
     
     # Read all rows once and extract timestamps and IR data
