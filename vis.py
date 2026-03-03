@@ -10,8 +10,8 @@ import pyhrv
 import pyhrv.frequency_domain as fd
 
 # === File paths ===
-#file_path = os.path.join("PPG", "day1test10400am.csv")
-file_path = "data\\PPGPVTtests\\day1test2530.csv"
+#file_path = os.path.join("PPG", "day1test2530.csv")
+file_path = "ppg_data.csv"
 
 # === Load IR data ===
 

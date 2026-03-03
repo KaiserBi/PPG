@@ -22,7 +22,7 @@ def process_file(file_path):
 
     # 4. Calculate lapses and 1/mean
     lapses_count = len(over_500)
-    inv_mean = 1 / over_500.mean() if not over_500.empty else None
+    inv_mean = 1 / col1.mean()
 
     return time_value, lapses_count, inv_mean
 
@@ -33,7 +33,7 @@ def extract_datetime_from_filename(filename):
     return datetime.strptime(date_str, "%m-%d-%Y_%H-%M")
 
 def main():
-    data_folder = os.path.join("./data", "PVTs")
+    data_folder = os.path.join("./data", "PVTs", "Day3")
     results = []
 
     for filename in os.listdir(data_folder):

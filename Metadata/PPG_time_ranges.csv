@@ -7,11 +7,31 @@ day1test5845,250,550
 day1test6945,100,400
 day1test71100,50,350
 day1test81210,310,610
-
 day1test9250am,136,436
-
-
 day1test10400am,200,500
+
+day2test1,170,470
+day2test2,200,500
+day2test3,2,302
+day2test4,170,470
+day2test5,100,400
+day2test6,30,330
+day2test7,80,380
+day2test8,0,300
+day2test9,0,300
+
+day3test1,100,400
+day3test2,10,310
+day3test3,0,300
+day3test4,50,350
+day3test5,70,370
+day3test6,100,400
+day3test7,100,400
+day3test8,0,300
+day3test9,125,425
+
+unscheduled2,50,350
+unscheduled4, 60,360
 
 
 default, 0, 900
