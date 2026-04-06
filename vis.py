@@ -10,12 +10,12 @@ import pyhrv
 import pyhrv.frequency_domain as fd
 
 # === File paths ===
-baser_path = os.path.join("PPG-Sleepiness-Detection", "data")
-base_path = os.path.join(baser_path, "firstTests")
-ir_path = os.path.join(base_path, "belle.csv")
+#file_path = os.path.join("PPG", "day1test2530.csv")
+file_path = "ppg_data.csv"
 
 # === Load IR data ===
-with open("day1test10400am.csv", 'r') as file:
+
+with open(file_path, 'r') as file:
     reader = csv.reader(file)
     
     # Read all rows once and extract timestamps and IR data
@@ -27,7 +27,7 @@ with open("day1test10400am.csv", 'r') as file:
             ir_data.append(float(row[1]))        # Column 1 = PPG signal
 
 
-time_interval = 1/400  # 1/200
+time_interval = 1/750  # 1/200
 time_interval_us = (int)(time_interval * 1e6)  # Convert to microseconds
 x_values = [i * time_interval for i in range(len(ir_data))]
 actual_sampling_rate = 1/time_interval
@@ -80,7 +80,21 @@ print(len(uniform_timestamps))
 
 # === CONTROL: Time range to plot (in seconds) ===
 start_time = 0   # set this to your desired start
-end_time = 900     # set this to your desired end
+end_time = 900  # set this to your desired end
+
+custom_time_ranges = {}
+
+with open("Metadata\\PPG_time_ranges.csv", mode='r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            time_ranges_filename = row['filename']
+            start = float(row['start'])  # or int() if all times are integers
+            end = float(row['end'])
+            custom_time_ranges[time_ranges_filename] = (start, end)
+    
+time_ranges_filename = os.path.splitext(os.path.basename(file_path))[0]
+print(time_ranges_filename)
+start_time, end_time = custom_time_ranges.get(time_ranges_filename, custom_time_ranges['default'])
 
 # === Filter data based on time range ===
 filtered_indices = [i for i, t in enumerate(uniform_timestamps) if start_time <= t <= end_time]
@@ -130,7 +144,7 @@ def bandpass(data, lowcut=0.5, highcut=10, fs=50, order=2):
 hpfiltered = bandpass(ir_smooth, lowcut=0.6, highcut=3.3, fs=actual_sampling_rate)
 
 # === Peak Finding ===
-peaks, props = find_peaks(hpfiltered, prominence=1.7, width = 0.18, distance = 0.5*actual_sampling_rate)
+peaks, props = find_peaks(hpfiltered, prominence=1.1, width = 0.13, distance = 0.4*actual_sampling_rate)
 
 
 # === FFT ===
@@ -157,22 +171,79 @@ for i in range(1, len(peak_times)):
     if 0.5 * median_rr < rr:
         filtered_peaks.append(peaks[i])
 
+# === Remove Ranges ===
+df = pd.read_csv("Metadata\\RemoveRanges.csv")
+# Filter only the rows relevant to this PPG file
+ranges = df[df['filename'] == time_ranges_filename][['start_idx', 'end_idx']].values
+
+print(ranges)
+
+# Remove segments from the filtered peak times based on the ranges
+filtered_peaks = np.array(filtered_peaks)
 # Recalculate using filtered peaks
 filtered_peak_times = np.array(filtered_peaks) * time_interval + start_time
-filtered_rr_intervals = np.diff(filtered_peak_times)
 print(filtered_peak_times)
 
-with open('output_column.csv', 'w', newline='') as file:
-    writer = csv.writer(file)
-    for item in filtered_rr_intervals:
-        writer.writerow([item])  # Wrap each item in a list to make it a row
+keep_mask = np.ones_like(filtered_peak_times, dtype=bool)
+
+# Remove peaks inside any of the specified ranges
+for start, end in ranges:
+    keep_mask &= ~((filtered_peak_times >= start) & (filtered_peak_times <= end))
+
+# Apply mask to keep only peaks outside all ranges
+ranges_removed_peak_times = filtered_peak_times[keep_mask]
+ranges_removed_peaks = ((ranges_removed_peak_times - start_time) / time_interval).astype(int)
+
+final_peaks = []
+custom_peaks = []
+# Add custom peaks
+df = pd.read_csv("Metadata\\Manual_peaks.csv")
+file_ranges = df[df['filename'].str.strip() == time_ranges_filename]
+for _, row in file_ranges.iterrows():
+    start_idx = float(row['startidx'])
+    end_idx = float(row['endidx'])
+    print("goon")
+    # Ensure the range is within bounds
+    start_idx = max(0, int(((start_idx - start_time) / time_interval)))
+    end_idx = min(len(hpfiltered) - 1, int(((end_idx - start_time) / time_interval)))
+
+    print(start_idx, end_idx)
+
+    if start_idx < end_idx:
+        # Find the index of max value in the range
+        local_max_idx = start_idx + np.argmax(hpfiltered[start_idx:end_idx+1])
+
+        # Add to peaks if not already present
+        if local_max_idx not in ranges_removed_peaks:
+            custom_peaks.append(local_max_idx)
 
 
-heart_rate = 60 / np.mean(filtered_rr_intervals)
+print(custom_peaks)
+print(final_peaks)
+final_peaks = np.sort(np.concatenate([ranges_removed_peaks, np.array(custom_peaks, dtype=int)]))
+
+final_peaks = np.array(final_peaks, dtype=int)  # or dtype=int if they're indices
+
+print(final_peaks)
+final_peak_times = final_peaks * time_interval + start_time
+
+custom_peak_times = np.array(custom_peaks) * time_interval + start_time
+
+
+filtered_rr_intervals = np.diff(final_peak_times)
+median_rr = np.median(filtered_rr_intervals)
+
+re_filtered_intervals = [filtered_rr_intervals[0]]  # Start with the first peak
+for i in range(1, len(filtered_rr_intervals)):
+    if 2.5 * median_rr > filtered_rr_intervals[i]:
+        re_filtered_intervals.append(filtered_rr_intervals[i])
+
+
+heart_rate = 60 / np.mean(re_filtered_intervals)
 bps = heart_rate / 60
-hrv = np.std(filtered_rr_intervals)
-
-
+hrv = np.std(re_filtered_intervals)
+print(re_filtered_intervals)
+re_filtered_intervals = np.array(re_filtered_intervals)
 
 
 # === LF/HF Ratio ===
@@ -180,7 +251,7 @@ sampling_rate_hz=4
 segment_length_s=570
 nfft_points=1024
 
-r_peak_times_s = np.cumsum(filtered_rr_intervals)
+r_peak_times_s = np.cumsum(re_filtered_intervals)
 # Adjust to start time from 0 if it's not already
 r_peak_times_s = r_peak_times_s - r_peak_times_s[0]
 
@@ -191,20 +262,12 @@ if r_peak_times_s[-1] < segment_length_s:
     segment_length_s = r_peak_times_s[-1] # Adjust segment length to actual duration
 
 # --- 2. Interpolation/Resampling ---
-# Create a regularly spaced time axis for interpolation
-# Ensure the end time for interpolation matches the segment_length_s
+
 time_interp = np.arange(0, segment_length_s, 1 / sampling_rate_hz)
 
-# Use linear interpolation (as a common choice for this data)
-# The original RR intervals are treated as values occurring at their respective R-peak times.
-# To get instantaneous heart rate or instantaneous RR, we often interpolate the RR interval series itself.
-# However, sometimes it's more appropriate to interpolate the instantaneous heart rate (60/RR) or log(RR).
-# For simplicity and directness here, we interpolate the RR intervals.
 
-# Handle cases where interpolation range might be outside available data
-# scipy.interpolate.interp1d requires sorted unique x values.
 unique_r_peak_times, unique_rr_intervals = np.unique(r_peak_times_s, return_index=True)
-f_interp = interp1d(unique_r_peak_times, filtered_rr_intervals[unique_rr_intervals], kind='linear', fill_value="extrapolate")
+f_interp = interp1d(unique_r_peak_times, re_filtered_intervals[unique_rr_intervals], kind='linear', fill_value="extrapolate")
 
 # Get the interpolated RR interval series (in seconds)
 interpolated_rr_s = f_interp(time_interp)
@@ -214,37 +277,22 @@ interpolated_rr_s = f_interp(time_interp)
 # Remove linear trend from the interpolated signal to improve PSD estimation
 detrended_signal = detrend(interpolated_rr_s)
 
-# --- 4. Power Spectral Density (PSD) Estimation using Welch's Method ---
-# Welch's method is a robust way to estimate PSD using FFT.
-# It automatically handles windowing and averaging of segments.
-# nperseg: Length of each segment used for FFT (similar to the 'N_FFT_points' concept).
-#          Should be a power of 2 and typically less than or equal to nfft_points.
-# noverlap: Number of points to overlap between segments.
-# fs: Sampling frequency of the interpolated signal.
-# nfft: Number of FFT points (pads signal with zeros if nperseg < nfft).
 
-# For a 5-minute recording, we often just want one large segment for FFT (like the document implies N_FFT_points).
-# So we set nperseg to be the nfft_points or the length of the signal if it's smaller.
+# --- 4. LF/HF (PSD) Calculation ---
 
-# Ensure nperseg is not greater than the signal length
 nperseg_actual = min(nfft_points, len(detrended_signal))
-
-# Ensure nperseg is a power of 2
 nperseg_actual = int(2**np.floor(np.log2(nperseg_actual)))
 
-# No overlap usually for a single full segment FFT like the document describes for short term
-# For longer recordings, overlapping segments (e.g., 50% overlap) are common.
 noverlap_actual = 0 # No overlap for single segment approach
 
 fafrequencies, psd = welch(detrended_signal,
                             fs=sampling_rate_hz,
                             nperseg=nperseg_actual,
                             noverlap=noverlap_actual,
-                            nfft=nfft_points, # Use this to pad with zeros if nperseg < nfft_points
-                            window='hann', # Hanning window, as suggested in the document
-                            scaling='spectrum') # 'spectrum' returns power spectral density
+                            nfft=nfft_points, 
+                            window='hann', 
+                            scaling='spectrum') 
 
-# Convert PSD units to ms^2/Hz (if original was seconds, then psd is s^2/Hz)
 psd_ms2_per_hz = psd * (1000**2)
 
 # --- 5. Define Frequency Bands and Calculate Power ---
@@ -258,11 +306,10 @@ vlf_indices = np.where((fafrequencies >= VLF_band[0]) & (fafrequencies < VLF_ban
 lf_indices = np.where((fafrequencies >= LF_band[0]) & (fafrequencies < LF_band[1]))[0]
 hf_indices = np.where((fafrequencies >= HF_band[0]) & (fafrequencies < HF_band[1]))[0]
 
-# Calculate power within each band by summing the PSD values in the band
-# multiplied by the frequency resolution (df)
-df = fafrequencies[1] - fafrequencies[0] # Frequency resolution
 
-total_power = np.sum(psd_ms2_per_hz) * df # Total power across all calculated frequencies
+df = fafrequencies[1] - fafrequencies[0] 
+
+total_power = np.sum(psd_ms2_per_hz) * df 
 
 vlf_power = np.sum(psd_ms2_per_hz[vlf_indices]) * df
 lf_power = np.sum(psd_ms2_per_hz[lf_indices]) * df
@@ -284,8 +331,6 @@ print(f"HF Power: {hf_power:.2f} ms^2 (Band: {HF_band[0]}-{HF_band[1]} Hz)")
 print(f"Normalized LF (LFnu): {lf_norm:.2f}")
 print(f"Normalized HF (HFnu): {hf_norm:.2f}")
 print(f"LF/HF Ratio: {lf_hf_ratio:.2f}")
-
-
 
 
 # === SNR ===
@@ -346,6 +391,9 @@ print(average_peak_value)
 
 # Convert list to numpy array
 
+
+# Access peak frequencies using the key 'fft_peak'
+
 # === Plot 1: Smoothed and Raw in Window 1 ===
 
 plt.figure(1, figsize=(12, 6))
@@ -366,8 +414,12 @@ plt.tight_layout()
 # === Plot 2: High Pass Detrend in Window 2 ===
 plt.figure(2, figsize=(12, 6))
 plt.plot(x_filtered, hpfiltered, label='High Pass Detrended', color='purple')
-plt.plot(filtered_peak_times, hpfiltered[filtered_peaks], 'ro', label="Peaks", markersize = 3)
+plt.plot(filtered_peak_times, hpfiltered[filtered_peaks], 'ro', label="Peaks", markersize = 4)
 plt.plot(peak_times, hpfiltered[peaks], 'ro', label="unfiltered peaks", markersize = 2, color = 'green')
+
+plt.plot(ranges_removed_peak_times, hpfiltered[ranges_removed_peaks], 'ro', label="removed ranges peaks", markersize = 4, color = 'black')
+plt.plot(custom_peak_times, hpfiltered[custom_peaks], 'ro', label="added peaks", markersize = 4, color = 'red')
+
 
 stats_text = f"Heart Rate: {heart_rate:.1f} BPM\nHRV (std RR): {hrv:.3f} s"
 plt.text(0.83, 0.6, stats_text, transform=plt.gca().transAxes, fontsize=12, 
@@ -412,35 +464,19 @@ plt.xlim(0, 15)
 plt.ylim(0, np.max(psd) * 1.1)  # Set y-axis limit to 110% of max PSD value
 
 
-
-# === Plot 5: RR-Interval PSD ===
-plt.figure(5, figsize=(10, 6))
-plt.plot(fafrequencies, psd_ms2_per_hz, color='blue', label='PSD')
-plt.xlabel('Frequency (Hz)')
-plt.ylabel('Power Spectral Density ($ms^2/Hz$)')
-plt.title('Heart Rate Variability Power Spectral Density (PSD)')
-#plt.grid(True, linestyle='--', alpha=0.7)
-
-# Highlight frequency bands
-plt.axvspan(LF_band[0], LF_band[1], color='red', alpha=0.2, label='LF Band')
-plt.axvspan(HF_band[0], HF_band[1], color='green', alpha=0.2, label='HF Band')
-plt.xlim(0, 1.5)  # Show up to 15 Hz (no need to show Nyquist at 200 Hz)
-
-
-
 # Formatting
-
-
+print("hiiii")
 
 # === Show both windows ===
-nni = np.array(filtered_rr_intervals)
+nni = np.array(re_filtered_intervals)
 # Compute the PSD and frequency domain parameters
-result = fd.welch_psd(nni=nni)
+result = fd.welch_psd(nni=nni, show=False)
 
-# Access peak frequencies using the key 'fft_peak'
-print(result['fft_peak'])
-
+print(result['fft_ratio'])
+freqbands = result['fft_abs']
+print(freqbands)
 print("hi")
+
 
 plt.show() 
 

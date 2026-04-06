@@ -3,7 +3,7 @@ import struct
 import csv
 
 # Open serial port
-ser = serial.Serial('COM8', 115200, timeout=1)
+ser = serial.Serial('COM3', 115200, timeout=1)
 
 # File to save data
 with open("ppg_data.csv", "w", newline='') as f:
