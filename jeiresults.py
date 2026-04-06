@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import csv
 import os
 import numpy as np
-from scipy.signal import hilbert, savgol_filter, find_peaks, welch, detrend, butter, filtfilt
+from scipy.signal import hilbert, savgol_filter, find_peaks, welch, detrend, butter, filtfilt, spectrogram
 import pandas as pd
 from scipy.integrate import simpson
 from scipy.interpolate import interp1d
@@ -283,6 +283,67 @@ def process_ppg_file(file_path):
             'hpfilter': hpfiltered,
             'xfilter': x_filtered_calc
         }
+    if os.path.basename(file_path) == "26_5pinky.csv":
+
+        N = len(y_fixed)
+
+        # Take middle 1/5th of the signal
+        frac = 1/5
+        start_idx = int(N * (0.4 - frac/2))   # center - half fraction
+        end_idx   = int(N * (0.6 + frac/2))   # center + half fraction
+        y_middle = y_fixed[start_idx:end_idx]
+
+
+        plt.rcParams['font.weight'] = 'bold'
+        plt.rcParams['font.size'] = 16   # sets default font size for everything
+
+
+        # Sampling frequency
+        fs = 400  
+        t = np.arange(len(y_middle)) / fs  
+
+        # === Plot Time-Domain Signal ===
+        plt.figure(figsize=(12, 4))
+        plt.plot(t, y_middle, color='black', linewidth=1)
+        plt.title("Time-Domain Signal")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Amplitude")
+        plt.xlim(0, 60)
+        plt.tight_layout()
+
+        # Spectrogram
+        f, tt, Sxx = spectrogram(y_middle, fs=fs, nperseg=8192, noverlap=4096)
+        tt = tt - tt[0]  # Adjust time to start from 0  
+        # Convert to PSD-like dB scale
+        Sxx_dB = 10 * np.log10(Sxx + 1e-12)
+        Sxx_dB = np.maximum(Sxx_dB, 0)
+
+        # === Plotting spectrogram only ===
+        plt.figure(figsize=(12, 6))
+        im = plt.pcolormesh(tt, f, Sxx_dB, shading='gouraud', cmap='plasma')
+        plt.title("Spectrogram (Power Spectral Density)")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Frequency [Hz]")
+        plt.ylim(0, 7)  # limit frequency axis to 7 Hz
+        plt.xlim(0,60)
+
+        yticks = np.arange(0, 7.1, 0.2)   # every 0.1 Hz
+        plt.yticks(yticks)
+
+        # Style: make integer Hz labels bold & larger
+        ax = plt.gca()
+        for label in ax.get_yticklabels():
+            val = float(label.get_text())
+            if abs(val - round(val)) < 1e-6:  # if it's an integer
+                label.set_fontsize(14)       
+                label.set_fontweight("bold")
+            else:
+                label.set_fontsize(10)
+                label.set_fontweight("normal")
+
+        plt.colorbar(im, label='PSD [dB/Hz]')
+        plt.tight_layout()
+        plt.show()
         
 
     return os.path.basename(file_path), snr, average_peak_value, plotting_data
@@ -382,6 +443,7 @@ def main():
         print(posthoc_apa)
 
     # === Plot distributions ===
+    '''
     sns.boxplot(x='finger', y='SNR', data=snr_long)
     sns.swarmplot(x='finger', y='SNR', data=snr_long, color=".25")
     plt.title("SNR distribution by finger")
@@ -399,7 +461,11 @@ def main():
     plt.title("SNR vs APA")
     plt.grid(True)
     plt.show()
+    '''
+
     
+
+
     # === POST-HOC PAIRWISE COMPARISONS (SNR) ===
     if anova_snr['p-GG-corr'].values[0] < 0.05:
         print("\nPost-hoc pairwise comparisons for SNR (Bonferroni corrected):")
