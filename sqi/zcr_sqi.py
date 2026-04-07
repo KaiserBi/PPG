@@ -174,7 +174,7 @@ def plot_file(label: str, signal: np.ndarray, fs: float,
 
 def main():
     parser = argparse.ArgumentParser(description="ZCR SQI calculator for PPG signals.")
-    mode = parser.add_mutually_exclusive_group(required=True)
+    mode = parser.add_mutually_exclusive_group(required=False)
     mode.add_argument("--csv",    help="Path to a single CSV file (requires --col)")
     mode.add_argument("--folder", help="Path to folder of headerless CSVs (col0=time_ms, col1=ppg)")
     parser.add_argument("--col",    default=None, help="Column name or index (single-file mode only)")
@@ -184,6 +184,10 @@ def main():
     parser.add_argument("--plot",   action="store_true",     help="Show plot(s)")
     parser.add_argument("--out",    default=None,            help="Output CSV (single-file mode only)")
     args = parser.parse_args()
+
+    # Default: scan the folder containing this script
+    if args.csv is None and args.folder is None:
+        args.folder = os.path.dirname(os.path.abspath(__file__))
 
     # FOLDER MODE
     if args.folder:
