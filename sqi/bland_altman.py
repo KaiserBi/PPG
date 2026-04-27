@@ -58,10 +58,3 @@ def plot_bland_altman(ppg, ecg):
     plt.grid(True)
     plt.show()
 
-ppg=sample_ppg.csv
-ecg=sample_ecg.csv
-
-results = plot_bland_altman(ppg, ecg)
-
-print(results)
-results.to_csv("bland_Altman_results.csv", index=False)
