@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def visualize_ecg(csv_path, title="ECG Signal", xlabel="Time (ms)", ylabel="Amplitude"):
+def visualize_ecg(csv_path, title="ECG Signal", xlabel="Time (s)", ylabel="Amplitude"):
     """
     Simple ECG/signal visualization from CSV file.
     
