@@ -1,79 +1,66 @@
-""" BASIC USAGE EXAMPLE
-This example shows how to use the MAX30102 sensor to collect data from the RED and IR channels.
+"""
+Multi-PPG acquisition over a TCA9548A I2C multiplexer.
 
-The sensor is connected to the I2C bus, and the I2C bus is scanned to ensure that the sensor is connected.
-The sensor is also checked to ensure that it is a MAX30102 or MAX30105 sensor.
+Each MAX30102 (fixed I2C address 0x57) sits behind one channel of the
+TCA9548A (default address 0x70). To talk to sensor N, we first write a
+one-hot byte (1 << N) to the mux, then run the normal MAX30102 driver
+against the same I2C bus.
 
-The sensor is set up with the following parameters:
-- Sample rate: 400 Hz
-- Averaged samples: 8
-- LED brightness: medium
-- Pulse width: 411 µs
-- Led mode: 2 (RED + IR)
+For every sample popped from any sensor we emit one 8-byte packet:
 
-The temperature is read at the beginning of the acquisition.
+    [ 0xAA | channel (u8) | timestamp_us (u32, big-endian) | sample (u16, big-endian) ]
 
-Then, in a loop the data is printed to the serial port, so that it can be plotted with a Serial Plotter.
-Also the real acquisition frequency (i.e. the rate at which samples are collected from the sensor) is computed
-and printed to the serial port. It differs from the sample rate, because the sensor processed the data and
-averages the samples before putting them into the FIFO queue (by default, 8 samples are averaged).
-
-Author: n-elia
+The PC-side receiver (`picoDataUnpacking.py`) splits the stream back out
+per channel. Status `print()`s share the same serial stream; the receiver
+treats anything between newlines that doesn't frame as ASCII status.
 """
 
-# Some ports need to import 'sleep' from 'time' module
-from machine import I2C, SoftI2C, Pin, UART
-from utime import ticks_diff, ticks_us
+from machine import SoftI2C, Pin
+from utime import ticks_diff, ticks_us, sleep_ms
 from time import sleep
 import ustruct
 import sys
 
 from max30102 import MAX30102, MAX30105_PULSE_AMP_LOW
-def main():
-    # I2C software instance
-    i2c = SoftI2C(sda=Pin(16),  # Here, use your I2C SDA pin
-                  scl=Pin(17),  # Here, use your I2C SCL pin
-                  freq=400000)  # Fast: 400kHz, slow: 100kHz
 
-    # Examples of working I2C configurations:
-    # Board             |   SDA pin  |   SCL pin
-    # ------------------------------------------
-    # ESP32 D1 Mini     |   22       |   21
-    # TinyPico ESP32    |   21       |   22
-    # Raspberry Pi Pico |   16       |   17
-    # TinyS3			|	 8		 |    9
+# I2C pins on the Pi Pico (same as the previous single-sensor firmware).
+I2C_SDA_PIN = 16
+I2C_SCL_PIN = 17
+I2C_FREQ = 400000
 
-    # Sensor instance
-    sensor = MAX30102(i2c=i2c)  # An I2C instance is required
+TCA9548A_ADDR = 0x70
+MAX30102_ADDR = 0x57
+MAX_CHANNELS = 8
 
-    # Scan I2C bus to ensure that the sensor is connected
-    if sensor.i2c_address not in i2c.scan():
-        print("Sensor not found.")
-        return
-    elif not (sensor.check_part_id()):
-        # Check that the targeted sensor is compatible
-        print("I2C device ID not corresponding to MAX30102 or MAX30105.")
-        return
-    else:
-        print("Sensor connected and recognized.")
 
-    # It's possible to set up the sensor at once with the setup_sensor() method.
-    # If no parameters are supplied, the default config is loaded:
-    # Led mode: 2 (RED + IR)
-    # ADC range: 16384
-    # Sample rate: 400 Hz
-    # Led power: maximum (50.0mA - Presence detection of ~12 inch)
-    # Averaged samples: 8
-    # pulse width: 411
-    print("Setting up sensor with default configuration.", '\n')
+class Mux:
+    """Thin wrapper around the TCA9548A. Caches the active channel so we
+    don't repeat the i2c.writeto when the same sensor is read twice in a
+    row."""
+
+    def __init__(self, i2c, addr=TCA9548A_ADDR):
+        self.i2c = i2c
+        self.addr = addr
+        self._current = -1
+        # Disable all channels at startup so an unconfigured mux doesn't
+        # leave two sensors fighting for the bus.
+        try:
+            self.i2c.writeto(self.addr, b"\x00")
+        except OSError:
+            pass
+
+    def select(self, channel):
+        if channel == self._current:
+            return
+        self.i2c.writeto(self.addr, bytes([1 << channel]))
+        self._current = channel
+
+
+def configure_sensor(sensor):
+    """Same configuration the single-sensor firmware used — preserved so
+    sample rate / pulse width / averaging stay comparable across the two
+    setups."""
     sensor.setup_sensor()
-
-    # It is also possible to tune the configuration parameters one by one.
-    # Set the sample rate to 400: 400 samples/s are collected by the sensor
-    # Set the number of samples to be averaged per each reading
-    # Set LED brightness to a medium value
-    #sensor.set_active_leds_amplitude(MAX30105_PULSE_AMP_MEDIUM)
-    
     sensor.set_adc_range(16384)
     sensor.set_pulse_width(69)
     sensor.set_active_leds_amplitude(MAX30105_PULSE_AMP_LOW)
@@ -82,43 +69,80 @@ def main():
     sensor.set_led_mode(1)
 
 
+def discover_sensors(i2c, mux):
+    """Walk every mux lane and instantiate a MAX30102 for each one that
+    answers at 0x57. Returns a list of (channel, sensor) pairs in channel
+    order."""
+    found = []
+    for ch in range(MAX_CHANNELS):
+        mux.select(ch)
+        sleep_ms(5)
+        try:
+            devices = i2c.scan()
+        except OSError:
+            devices = []
+        if MAX30102_ADDR not in devices:
+            continue
+
+        sensor = MAX30102(i2c=i2c)
+        if not sensor.check_part_id():
+            print(f"ch{ch}: device at 0x57 is not a MAX30102/MAX30105")
+            continue
+
+        configure_sensor(sensor)
+        found.append((ch, sensor))
+        print(f"ch{ch}: MAX30102 ready")
+    return found
+
+
+def main():
+    i2c = SoftI2C(sda=Pin(I2C_SDA_PIN), scl=Pin(I2C_SCL_PIN), freq=I2C_FREQ)
+    mux = Mux(i2c)
+
+    print("Discovering MAX30102 sensors behind TCA9548A...")
+    sensors = discover_sensors(i2c, mux)
+
+    if not sensors:
+        print("No MAX30102 sensors found on any mux channel.")
+        return
+
+    print(f"Active channels: {[ch for ch, _ in sensors]}")
+
+    # Optional die-temperature readout for the first sensor as a sanity
+    # check — matches the spirit of the old firmware's print.
+    mux.select(sensors[0][0])
+    print(f"ch{sensors[0][0]} die temperature: {sensors[0][1].read_temperature()}")
+
     sleep(1)
+    print("Starting high-speed multi-PPG acquisition...")
 
-    # The readTemperature() method allows to extract the die temperature in °C    
-    print("Reading temperature in °C.", '\n')
-    print(sensor.read_temperature())
-
-    # Select whether to compute the acquisition frequency or not
-    compute_frequency = True
-
-    print("Starting data acquisition from RED & IR registers...", '\n')
-    sleep(1)  # 50ms
-
-    batch_size = 50  # Smaller batches = more frequent updates
+    batch_size = 50
     t_start = ticks_us()
     samples_collected = 0
-    print("Starting high-speed acquisition...")
 
     while True:
-        sensor.check()  # Poll for new data
-        
-        if sensor.available():
-            # Get sample using standard library method
-            timestamp_us = ticks_us()
-            sample = sensor.pop_red_from_storage()
-            sys.stdout.buffer.write(ustruct.pack('>IH', timestamp_us, sample))
-            samples_connected+=1
+        for ch, sensor in sensors:
+            mux.select(ch)
+            sensor.check()
+            while sensor.available():
+                timestamp_us = ticks_us()
+                sample = sensor.pop_red_from_storage()
+                # 8-byte framed packet: sync, channel, t, sample.
+                # Big-endian throughout to match the PC receiver.
+                sys.stdout.buffer.write(
+                    ustruct.pack(">BBIH", 0xAA, ch, timestamp_us & 0xFFFFFFFF, sample & 0xFFFF)
+                )
+                samples_collected += 1
 
-            # Print immediately (minimal formatting)
-            
-            # Print frequency stats every batch
-            
-            if samples_collected % batch_size == 0:
-                duration_us = ticks_diff(ticks_us(), t_start)
-                freq = (batch_size * 1_000_000) / duration_us
-                print(f"Freq:{freq:.1f}Hz")  # Compact frequency report
-                t_start = ticks_us()
-            
+                if samples_collected % batch_size == 0:
+                    duration_us = ticks_diff(ticks_us(), t_start)
+                    if duration_us > 0:
+                        freq = (batch_size * 1_000_000) / duration_us
+                        # Aggregate Hz across all sensors. The receiver
+                        # routes this text line to its own log channel.
+                        print(f"Freq:{freq:.1f}Hz")
+                    t_start = ticks_us()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
