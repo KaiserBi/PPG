@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -c \"import serial; print\\(serial.__file__\\); print\\(getattr\\(serial,'VERSION','no VERSION'\\)\\)\")",
+      "Bash(git -C c:/Research/PPG mv picoDataUnpacking.py old_picoDataUnpacking.py)"
+    ]
+  }
+}
