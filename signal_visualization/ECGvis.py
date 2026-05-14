@@ -18,8 +18,8 @@ def visualize_ecg(csv_path, title="ECG Signal", xlabel="Time (s)", ylabel="Ampli
     ylabel : str
         Label for y-axis
     """
-    # Read CSV file
-    data = pd.read_csv(csv_path)
+    # Read CSV file with error handling for malformed rows
+    data = pd.read_csv(csv_path, on_bad_lines='skip')
     
     # Extract time and signal (handles both headerless and header-based CSVs)
     time = data.iloc[:, 0].values.astype(float)
@@ -57,7 +57,7 @@ def visualize_ecg_multiple(csv_paths, titles=None):
         axes = [axes]
     
     for idx, csv_path in enumerate(csv_paths):
-        data = pd.read_csv(csv_path)
+        data = pd.read_csv(csv_path, on_bad_lines='skip')
         time = data.iloc[:, 0].values.astype(float)
         signal = data.iloc[:, 1].values.astype(float)
         time = (time - time[0]) / 1000
@@ -75,5 +75,5 @@ def visualize_ecg_multiple(csv_paths, titles=None):
 
 if __name__ == "__main__":
     # Example usage
-    csv_file = "ecg_data.csv"
+    csv_file = "ecg_data_20260506_203817.csv"
     visualize_ecg(csv_file, title="ecg")

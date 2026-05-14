@@ -1,8 +1,8 @@
 """
-ccc_compare.py  --  PPG vs ECG Interval Comparison  |  SEAL Lab
+ccc.py  --  PPG vs ECG Interval Comparison  |  SEAL Lab
 ================================================================
 Run with no arguments:
-    python ccc_compare.py
+    python ccc.py
 
 PIPELINE (all built in — no external scripts needed):
     1. Load raw ECG CSV  (col0 = time ms, col1 = signal)
@@ -65,8 +65,9 @@ def detect_r_peaks(ecg, fs):
 
     Strategy:
       - Bandpass filter (0.5-40 Hz) to remove baseline wander
+      - Auto-flip if the lead is inverted (|min| > max after centering)
       - find_peaks with minimum distance = 0.4s (caps at ~150 BPM)
-        and height threshold = 50% of signal range
+        and height threshold derived from the 90th-percentile amplitude
 
     Parameters
     ----------
@@ -78,7 +79,11 @@ def detect_r_peaks(ecg, fs):
     peaks : np.ndarray  -- sample indices of R-peaks
     """
     filtered = bandpass(ecg, fs, low=0.5, high=40.0)
-    min_distance = int(0.4 * fs)          # minimum 400ms between beats (~150 BPM max)
+    # Auto-detect polarity: if the negative excursion dominates, the lead is inverted.
+    centered = filtered - np.mean(filtered)
+    if np.abs(centered.min()) > centered.max():
+        filtered = -filtered
+    min_distance  = int(0.4 * fs)         # minimum 400 ms between beats (~150 BPM max)
     height_thresh = np.percentile(filtered, 90) * 0.5   # 50% of 90th percentile
     peaks, _ = find_peaks(filtered, distance=min_distance, height=height_thresh)
     return peaks
@@ -109,23 +114,25 @@ def detect_ppg_peaks(ppg, fs):
     return peaks
 
 
-def peaks_to_intervals(peak_indices, fs):
+def peaks_to_intervals(peak_indices, time_ms):
     """
-    Convert peak sample indices to inter-peak intervals in ms.
+    Convert peak indices to inter-peak intervals in ms, using the recorded
+    timestamps (not an inferred sample rate). This stays accurate even if
+    the device drops samples or has timing jitter.
 
     Parameters
     ----------
     peak_indices : np.ndarray  -- sample positions of detected peaks
-    fs           : float       -- sampling frequency (Hz)
+    time_ms      : np.ndarray  -- per-sample timestamps in milliseconds
 
     Returns
     -------
     intervals_ms : np.ndarray  -- intervals in ms (length = n_peaks - 1)
-    peak_times_s : np.ndarray  -- timestamps of each peak in seconds
-                                  (length = n_peaks - 1, uses the later peak)
+    peak_times_s : np.ndarray  -- timestamp of the later peak in each pair (s)
     """
-    intervals_ms = np.diff(peak_indices) / fs * 1000.0
-    peak_times_s = peak_indices[1:] / fs      # timestamp = end of each interval
+    peak_times_ms = time_ms[peak_indices]
+    intervals_ms  = np.diff(peak_times_ms)
+    peak_times_s  = peak_times_ms[1:] / 1000.0   # timestamp = end of each interval
     return intervals_ms, peak_times_s
 
 
@@ -133,11 +140,15 @@ def peaks_to_intervals(peak_indices, fs):
 
 def match_intervals(rr_ms, rr_times, ppi_ms, ppi_times):
     """
-    Match RR (ECG) and PPI (PPG) intervals by nearest timestamp.
+    Match RR (ECG) and PPI (PPG) intervals one-to-one by nearest timestamp.
 
-    Because of Pulse Transit Time (~200-300ms), PPG peaks are delayed
+    Because of Pulse Transit Time (~200-300 ms), PPG peaks are delayed
     relative to ECG R-peaks. Nearest-neighbour matching handles this
     without requiring a fixed PTT assumption.
+
+    The acceptance window is set to half the median RR (capped at 500 ms)
+    so that at high heart rates we can't accidentally pair across two
+    beats. Each PPI may only be claimed once.
 
     Parameters
     ----------
@@ -150,13 +161,23 @@ def match_intervals(rr_ms, rr_times, ppi_ms, ppi_times):
     -------
     matched_rr, matched_ppi : np.ndarrays of matched pairs
     """
+    if len(rr_times) == 0 or len(ppi_times) == 0:
+        return np.array([]), np.array([])
+
+    median_rr_s   = float(np.median(rr_ms)) / 1000.0
+    tol_s         = min(0.5, max(0.15, median_rr_s / 2.0))
+    used          = np.zeros(len(ppi_times), dtype=bool)
     matched_rr, matched_ppi = [], []
     for i, t in enumerate(rr_times):
-        j = np.argmin(np.abs(ppi_times - t))
-        # Accept match only if within 1 full beat period (1.5s)
-        if np.abs(ppi_times[j] - t) < 1.5:
+        # Among unused PPI timestamps, pick the closest within the tolerance.
+        candidates = np.where(~used)[0]
+        if candidates.size == 0:
+            break
+        j = candidates[np.argmin(np.abs(ppi_times[candidates] - t))]
+        if np.abs(ppi_times[j] - t) <= tol_s:
             matched_rr.append(rr_ms[i])
             matched_ppi.append(ppi_ms[j])
+            used[j] = True
     return np.array(matched_rr), np.array(matched_ppi)
 
 
@@ -170,9 +191,9 @@ def compute_ccc(x, y):
     y = ECG-derived RR  (ms)  [gold standard]
     """
     if len(x) != len(y):
-        sys.exit(f"[ERROR] Matched arrays differ in length ({len(x)} vs {len(y)}).")
+        raise ValueError(f"Matched arrays differ in length ({len(x)} vs {len(y)}).")
     if len(x) < 2:
-        sys.exit("[ERROR] Need at least 2 matched pairs.")
+        raise ValueError("Need at least 2 matched pairs.")
 
     mu_x, mu_y    = np.mean(x), np.mean(y)
     var_x, var_y  = np.var(x, ddof=0), np.var(y, ddof=0)
@@ -231,9 +252,19 @@ def load_raw_csv(csv_path):
     print(f"  -> Loaded '{csv_path}'  |  {df.shape[0]} rows, {df.shape[1]} cols")
     time_ms = pd.to_numeric(df.iloc[:, 0], errors='coerce').to_numpy(dtype=float)
     signal  = pd.to_numeric(df.iloc[:, 1], errors='coerce').to_numpy(dtype=float)
-    # Infer fs from median sample interval
+    # Drop rows where either column failed to parse (would otherwise poison fs / find_peaks)
+    valid = ~(np.isnan(time_ms) | np.isnan(signal))
+    n_dropped = int((~valid).sum())
+    if n_dropped:
+        print(f"  -> Dropped {n_dropped} non-numeric rows")
+    time_ms, signal = time_ms[valid], signal[valid]
+    if len(time_ms) < 2:
+        sys.exit(f"[ERROR] {csv_path} has fewer than 2 valid rows after parsing.")
+    # Infer fs from median sample interval (used only as a fallback for filter design)
     dt_ms = np.median(np.diff(time_ms))
-    fs    = 1000.0 / dt_ms
+    if dt_ms <= 0:
+        sys.exit(f"[ERROR] Non-monotonic timestamps in {csv_path} (median dt = {dt_ms} ms).")
+    fs = 1000.0 / dt_ms
     print(f"  -> Inferred fs: {fs:.1f} Hz  |  Signal length: {len(signal)} samples\n")
     return time_ms, signal, fs
 
@@ -378,9 +409,9 @@ def main():
     print(f"  ECG R-peaks detected   : {len(ecg_peaks)}")
     print(f"  PPG systolic peaks     : {len(ppg_peaks)}")
 
-    # Intervals
-    rr_ms,  rr_times  = peaks_to_intervals(ecg_peaks, ecg_fs)
-    ppi_ms, ppi_times = peaks_to_intervals(ppg_peaks, ppg_fs)
+    # Intervals (use recorded timestamps so jitter / dropped samples don't bias us)
+    rr_ms,  rr_times  = peaks_to_intervals(ecg_peaks, ecg_t)
+    ppi_ms, ppi_times = peaks_to_intervals(ppg_peaks, ppg_t)
     print(f"  RR intervals           : {len(rr_ms)}  "
           f"(mean {rr_ms.mean():.1f} ms, std {rr_ms.std():.1f} ms)")
     print(f"  PPI intervals          : {len(ppi_ms)}  "
@@ -421,8 +452,10 @@ def main():
     print("=" * 62)
     print()
 
-    # Save
+    # Save  (resolve relative paths against the script dir, like load_raw_csv does)
     if out_raw:
+        if not os.path.isabs(out_raw):
+            out_raw = os.path.join(_SCRIPT_DIR, out_raw)
         pd.DataFrame({
             "ecg_rr_ms":    matched_rr,
             "ppg_ppi_ms":   matched_ppi,
